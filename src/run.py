@@ -47,9 +47,13 @@ def run(_run, _config, _log):
         )
         tb_exp_direc = os.path.join(tb_logs_direc, "{}").format(unique_token)
         logger.setup_tb(tb_exp_direc)
+    elif args.use_wandb:
+        configs = {}
+        for arg in vars(args):
+            configs[arg] = getattr(args, arg)
+        logger.setup_wandb(configs)
 
-    # sacred is on by default
-    logger.setup_sacred(_run)
+    logger.setup_sacred(_run) # TODO: learn more about sacred
 
     # Run and train
     run_sequential(args=args, logger=logger)
@@ -237,6 +241,8 @@ def run_sequential(args, logger):
         if (runner.t_env - last_log_T) >= args.log_interval:
             logger.log_stat("episode", episode, runner.t_env)
             logger.print_recent_stats()
+            if args.use_wandb:
+                logger.log_wandb_stats()
             last_log_T = runner.t_env
 
     runner.close_env()
