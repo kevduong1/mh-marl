@@ -27,7 +27,7 @@ class Logger:
     
     def setup_wandb(self, configs):
         import wandb
-        # TODO: add tags and grouping
+        # TODO: add tags and grouping options
         self.wandb = wandb.init(group="v0", project="wandb-test", entity="kdd-marl", config=configs)
         
 
