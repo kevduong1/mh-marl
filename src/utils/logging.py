@@ -9,6 +9,7 @@ class Logger:
         self.use_tb = False
         self.use_sacred = False
         self.use_hdf = False
+        self.wandb = None
 
         self.stats = defaultdict(lambda: [])
 
@@ -23,6 +24,13 @@ class Logger:
         self._run_obj = sacred_run_dict
         self.sacred_info = sacred_run_dict.info
         self.use_sacred = True
+    
+    def setup_wandb(self, configs):
+        import wandb
+        print(configs["tag"])
+        print(configs["group"])
+        self.wandb = wandb.init(group="v0", project="wandb-test", entity="kdd-marl", config=configs)
+        
 
     def log_stat(self, key, value, t, to_sacred=True):
         self.stats[key].append((t, value))
@@ -55,6 +63,21 @@ class Logger:
             log_str += "{:<25}{:>8}".format(k + ":", item)
             log_str += "\n" if i % 4 == 0 else "\t"
         self.console_logger.info(log_str)
+        
+    def log_wandb_stats(self):
+        log = {}
+        for (k, v) in sorted(self.stats.items()):
+            window = 5 if k != "epsilon" else 1
+            try:
+                item = np.mean([x[1] for x in self.stats[k][-window:]]).item()
+            except:
+                item = np.mean([x[1].item() for x in self.stats[k][-window:]]).item()
+            
+            log[k] = item
+
+        total_steps = self.stats["episode"][-1][0]
+        self.wandb.log(log, step=total_steps)
+        
 
 
 # set up a custom logger
