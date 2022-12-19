@@ -5,6 +5,11 @@ env_args:
   time_limit: 100
   pretrained_wrapper: null
 
+wandb_args:
+  project: "misc"
+  tag: null
+  group: ""
+
 test_greedy: True
 test_nepisode: 100
 test_interval: 50000

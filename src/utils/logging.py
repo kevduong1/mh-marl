@@ -27,8 +27,9 @@ class Logger:
     
     def setup_wandb(self, configs):
         import wandb
-        # TODO: add tags and grouping options
-        self.wandb = wandb.init(group="v0", project="wandb-test", entity="kdd-marl", config=configs)
+        self.wandb = wandb.init(group=configs["wandb_args"]["group"], project=configs["wandb_args"]["project"], entity="kdd-marl", config=configs,
+                                tags=[configs["wandb_args"]["tag"]] if configs["wandb_args"]["tag"] else [] )
+        # TODO: add run names (ask Farrukh about convention)
         
 
     def log_stat(self, key, value, t, to_sacred=True):
