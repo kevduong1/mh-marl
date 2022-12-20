@@ -245,4 +245,7 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+# results folder
+/results
+/wandb
 # End of https://www.gitignore.io/api/linux,python,windows,pycharm+all,visualstudiocode
