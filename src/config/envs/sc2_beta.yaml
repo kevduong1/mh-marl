@@ -30,6 +30,11 @@ env_args:
   heuristic_ai: False
   debug: False
 
+wandb_args:
+  project: "misc"
+  tag: null
+  group: ""
+
 learner_log_interval: 20000
 log_interval: 20000
 runner_log_interval: 20000
