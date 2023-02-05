@@ -1,31 +1,10 @@
-from functools import partial
-import pretrained
-from smac.env import MultiAgentEnv, StarCraft2Env
-import sys
-import os
-import gym
+from smac.env import MultiAgentEnv
 from gym import ObservationWrapper, spaces
-from gym.envs import registry as gym_registry
 from gym.spaces import flatdim
 import numpy as np
 from gym.wrappers import TimeLimit as GymTimeLimit
-from .pettingzooenv import PettingZooWrapper
-
-def env_fn(env, **kwargs) -> MultiAgentEnv:
-    return env(**kwargs)
-
-
-REGISTRY = {}
-REGISTRY["sc2"] = partial(env_fn, env=StarCraft2Env)
-# TODO: add keys, check https://github.com/semitable/lb-foraging/blob/master/lbforaging/__init__.py
-REGISTRY["pettingzoo"] = partial(env_fn, env=PettingZooWrapper)
-
-
-if sys.platform == "linux":
-    os.environ.setdefault(
-        "SC2PATH", os.path.join(os.getcwd(), "3rdparty", "StarCraftII")
-    )
-
+from pettingzoo.butterfly import knights_archers_zombies_v10
+from supersuit import flatten_v0, black_death_v3
 
 class TimeLimit(GymTimeLimit):
     def __init__(self, env, max_episode_steps=None):
@@ -49,60 +28,49 @@ class TimeLimit(GymTimeLimit):
         return observation, reward, done, info
 
 
-class FlattenObservation(ObservationWrapper):
-    r"""Observation wrapper that flattens the observation of individual agents."""
-
-    def __init__(self, env):
-        super(FlattenObservation, self).__init__(env)
-
-        ma_spaces = []
-
-        for sa_obs in env.observation_space:
-            flatdim = spaces.flatdim(sa_obs)
-            ma_spaces += [
-                spaces.Box(
-                    low=-float("inf"),
-                    high=float("inf"),
-                    shape=(flatdim,),
-                    dtype=np.float32,
-                )
-            ]
-
-        self.observation_space = spaces.Tuple(tuple(ma_spaces))
-
-    def observation(self, observation):
-        return tuple(
-            [
-                spaces.flatten(obs_space, obs)
-                for obs_space, obs in zip(self.env.observation_space, observation)
-            ]
-        )
-
-
-class _GymmaWrapper(MultiAgentEnv):
-    def __init__(self, key, time_limit, pretrained_wrapper, **kwargs):
+class PettingZooWrapper(MultiAgentEnv):
+    def __init__(self, time_limit=2500, **kwargs):
         self.episode_limit = time_limit
-        self._env = TimeLimit(gym.make(f"{key}"), max_episode_steps=time_limit)
-        self._env = FlattenObservation(self._env)
-
-        if pretrained_wrapper:
-            self._env = getattr(pretrained, pretrained_wrapper)(self._env)
-
-        self.n_agents = self._env.n_agents
+        
+        self._env = knights_archers_zombies_v10.env(
+                    # https://www.pettingzoo.ml/butterfly/knights_archers_zombies
+                    # making environment harder
+                    use_typemasks=True,
+                    max_arrows=2,
+                    line_death=True,
+                    max_cycles=time_limit,
+                )
+        self._env = flatten_v0(black_death_v3(self._env))
+        self._env.reset()
+        self.n_agents = self._env.num_agents
+        self.agents = self._env.possible_agents
         self._obs = None
-
-        self.longest_action_space = max(self._env.action_space, key=lambda x: x.n)
+        self.longest_action_space = max(self._env.action_spaces.values(), key=lambda x: x.n)
         self.longest_observation_space = max(
-            self._env.observation_space, key=lambda x: x.shape
+            self._env.observation_spaces.values(), key=lambda x: x.shape
         )
-
-        self._seed = kwargs["seed"]
-        self._env.seed(self._seed)
+        # TODO: Add env keys?
+        #self._seed = kwargs["seed"]
+        #self._env.seed(self._seed)
 
     def step(self, actions):
         """ Returns reward, terminated, info """
+        # This returns to episode runner that the episode is finished
+        if True in self._env.terminations.values():
+            # Check if rewards still have value after termination
+            return 0.0, True, {}
+        
         actions = [int(a) for a in actions]
-        self._obs, reward, done, info = self._env.step(actions)
+        self._obs = [None for _ in actions]
+        reward = [None for _ in actions]
+        done = [None for _ in actions]
+        
+        for agent, action, i in zip(self._env.rewards.keys(), actions, range(self.n_agents)):
+            self._env.step(action)
+            self._obs[i] = self._env.observe(agent)
+            reward[i] = self._env.rewards[agent]
+            done[i] = self._env.terminations[agent]
+            
         self._obs = [
             np.pad(
                 o,
@@ -112,8 +80,8 @@ class _GymmaWrapper(MultiAgentEnv):
             )
             for o in self._obs
         ]
-
-        return float(sum(reward)), all(done), {}
+        
+        return float(sum(reward)), all(done), self._env.rewards
 
     def get_obs(self):
         """ Returns all agent observations in a list """
@@ -121,33 +89,18 @@ class _GymmaWrapper(MultiAgentEnv):
 
     def get_obs_agent(self, agent_id):
         """ Returns observation for agent_id """
-        raise self._obs[agent_id]
+        raise self._envs.observe(agent_id)
 
     def get_obs_size(self):
         """ Returns the shape of the observation """
-        return flatdim(self.longest_observation_space)
+        return self.longest_observation_space.shape[0]
 
     def get_state(self):
         return np.concatenate(self._obs, axis=0).astype(np.float32)
 
     def get_state_size(self):
         """ Returns the shape of the state"""
-        return self.n_agents * flatdim(self.longest_observation_space)
-
-    def get_obs_agent(self, agent_id):
-        """ Returns observation for agent_id """
-        raise self._obs[agent_id]
-
-    def get_obs_size(self):
-        """ Returns the shape of the observation """
-        return flatdim(self.longest_observation_space)
-
-    def get_state(self):
-        return np.concatenate(self._obs, axis=0).astype(np.float32)
-
-    def get_state_size(self):
-        """ Returns the shape of the state"""
-        return self.n_agents * flatdim(self.longest_observation_space)
+        return self.n_agents * self.longest_observation_space.shape[0]
 
     def get_avail_actions(self):
         avail_actions = []
@@ -158,18 +111,22 @@ class _GymmaWrapper(MultiAgentEnv):
 
     def get_avail_agent_actions(self, agent_id):
         """ Returns the available actions for agent_id """
-        valid = flatdim(self._env.action_space[agent_id]) * [1]
+        agent_id = self._env.agents[agent_id]
+        valid = self._env.action_space(agent_id).n * [1]
         invalid = [0] * (self.longest_action_space.n - len(valid))
         return valid + invalid
 
     def get_total_actions(self):
         """ Returns the total number of actions an agent could ever take """
         # TODO: This is only suitable for a discrete 1 dimensional action space for each agent
-        return flatdim(self.longest_action_space)
+        return self.longest_action_space.n
 
     def reset(self):
         """ Returns initial observations and states"""
-        self._obs = self._env.reset()
+        self._env.reset()
+        observation = []
+        for agent in self._env.possible_agents:
+            observation.append(self._env.observe(agent))
         self._obs = [
             np.pad(
                 o,
@@ -177,8 +134,9 @@ class _GymmaWrapper(MultiAgentEnv):
                 "constant",
                 constant_values=0,
             )
-            for o in self._obs
+            for o in observation
         ]
+        
         return self.get_obs(), self.get_state()
 
     def render(self):
@@ -195,6 +153,3 @@ class _GymmaWrapper(MultiAgentEnv):
 
     def get_stats(self):
         return {}
-
-
-REGISTRY["gymma"] = partial(env_fn, env=_GymmaWrapper)

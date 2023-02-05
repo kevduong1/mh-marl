@@ -22,6 +22,8 @@ class EpisodeRunner:
         self.test_returns = []
         self.train_stats = {}
         self.test_stats = {}
+        self.agent_rewards_train = {}
+        self.agent_rewards_test = {}
 
         # Log the first run
         self.log_train_stats_t = -1000000
@@ -50,6 +52,7 @@ class EpisodeRunner:
 
         terminated = False
         episode_return = 0
+        agent_returns = {}
         self.mac.init_hidden(batch_size=self.batch_size)
 
         while not terminated:
@@ -59,7 +62,6 @@ class EpisodeRunner:
                 "avail_actions": [self.env.get_avail_actions()],
                 "obs": [self.env.get_obs()]
             }
-
             self.batch.update(pre_transition_data, ts=self.t)
 
             # Pass the entire batch of experiences up till now to the agents
@@ -67,7 +69,15 @@ class EpisodeRunner:
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)
 
             reward, terminated, env_info = self.env.step(actions[0])
+            
             episode_return += reward
+            # total up each agent individual reward
+            for key in env_info:
+                if key in agent_returns:
+                    agent_returns[key] += env_info[key]
+                else:
+                    agent_returns[key] = env_info[key]
+            
 
             post_transition_data = {
                 "actions": actions,
@@ -92,6 +102,7 @@ class EpisodeRunner:
 
         cur_stats = self.test_stats if test_mode else self.train_stats
         cur_returns = self.test_returns if test_mode else self.train_returns
+        cur_agent_returns = self.agent_rewards_test if test_mode else self.agent_rewards_train
         log_prefix = "test_" if test_mode else ""
         cur_stats.update({k: cur_stats.get(k, 0) + env_info.get(k, 0) for k in set(cur_stats) | set(env_info)})
         cur_stats["n_episodes"] = 1 + cur_stats.get("n_episodes", 0)
@@ -101,11 +112,19 @@ class EpisodeRunner:
             self.t_env += self.t
 
         cur_returns.append(episode_return)
+        
+        for agent in agent_returns:
+            if agent in cur_agent_returns:
+                cur_agent_returns[agent].append(agent_returns[agent])
+            else:
+                cur_agent_returns[agent] = [(agent_returns[agent])]
 
         if test_mode and (len(self.test_returns) == self.args.test_nepisode):
             self._log(cur_returns, cur_stats, log_prefix)
+            self._log_individual_rewards(cur_agent_returns, log_prefix)
         elif self.t_env - self.log_train_stats_t >= self.args.runner_log_interval:
             self._log(cur_returns, cur_stats, log_prefix)
+            self._log_individual_rewards(cur_agent_returns, log_prefix)
             if hasattr(self.mac.action_selector, "epsilon"):
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
@@ -121,3 +140,8 @@ class EpisodeRunner:
             if k != "n_episodes":
                 self.logger.log_stat(prefix + k + "_mean" , v/stats["n_episodes"], self.t_env)
         stats.clear()
+        
+    def _log_individual_rewards(self, agent_returns, prefix):
+        for agent in agent_returns:
+            self.logger.log_stat(prefix + agent + " return_mean", np.mean(agent_returns[agent]), self.t_env)
+        agent_returns.clear()

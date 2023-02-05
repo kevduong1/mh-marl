@@ -41,7 +41,8 @@ class ParallelRunner:
         self.test_returns = []
         self.train_stats = {}
         self.test_stats = {}
-
+        self.agent_rewards_train = {}
+        self.agent_rewards_test = {}
         self.log_train_stats_t = -100000
 
     def setup(self, scheme, groups, preprocess, mac):
@@ -92,6 +93,7 @@ class ParallelRunner:
         all_terminated = False
         episode_returns = [0 for _ in range(self.batch_size)]
         episode_lengths = [0 for _ in range(self.batch_size)]
+        agent_returns = [{} for _ in range(self.batch_size)]
         self.mac.init_hidden(batch_size=self.batch_size)
         terminated = [False for _ in range(self.batch_size)]
         envs_not_terminated = [b_idx for b_idx, termed in enumerate(terminated) if not termed]
@@ -142,9 +144,15 @@ class ParallelRunner:
                     data = parent_conn.recv()
                     # Remaining data for this current timestep
                     post_transition_data["reward"].append((data["reward"],))
-
                     episode_returns[idx] += data["reward"]
                     episode_lengths[idx] += 1
+                    
+                    for key in data["info"]:
+                        if key in agent_returns[idx]:
+                            agent_returns[idx][key] += data["info"][key]
+                        else:
+                            agent_returns[idx][key] = data["info"][key]
+
                     if not test_mode:
                         self.env_steps_this_run += 1
 
@@ -184,6 +192,7 @@ class ParallelRunner:
 
         cur_stats = self.test_stats if test_mode else self.train_stats
         cur_returns = self.test_returns if test_mode else self.train_returns
+        cur_agent_returns = self.agent_rewards_test if test_mode else self.agent_rewards_train
         log_prefix = "test_" if test_mode else ""
         infos = [cur_stats] + final_env_infos
         cur_stats.update({k: sum(d.get(k, 0) for d in infos) for k in set.union(*[set(d) for d in infos])})
@@ -191,12 +200,23 @@ class ParallelRunner:
         cur_stats["ep_length"] = sum(episode_lengths) + cur_stats.get("ep_length", 0)
 
         cur_returns.extend(episode_returns)
+        
+        # append episodic returns for each individual agent
+        for agent in agent_returns[0]:
+            for idx in range(len(agent_returns)):
+                if agent in cur_agent_returns:
+                    cur_agent_returns[agent].append(agent_returns[idx][agent])
+                else:
+                    cur_agent_returns[agent] = [(agent_returns[idx][agent])]
+                    
 
         n_test_runs = max(1, self.args.test_nepisode // self.batch_size) * self.batch_size
         if test_mode and (len(self.test_returns) == n_test_runs):
             self._log(cur_returns, cur_stats, log_prefix)
+            self._log_individual_rewards(cur_agent_returns, log_prefix)
         elif self.t_env - self.log_train_stats_t >= self.args.runner_log_interval:
             self._log(cur_returns, cur_stats, log_prefix)
+            self._log_individual_rewards(cur_agent_returns, log_prefix)
             if hasattr(self.mac.action_selector, "epsilon"):
                 self.logger.log_stat("epsilon", self.mac.action_selector.epsilon, self.t_env)
             self.log_train_stats_t = self.t_env
@@ -212,6 +232,11 @@ class ParallelRunner:
             if k != "n_episodes":
                 self.logger.log_stat(prefix + k + "_mean" , v/stats["n_episodes"], self.t_env)
         stats.clear()
+        
+    def _log_individual_rewards(self, agent_returns, prefix):
+        for agent in agent_returns:
+            self.logger.log_stat(prefix + agent + " return_mean", np.mean(agent_returns[agent]), self.t_env)
+        agent_returns.clear()
 
 
 def env_worker(remote, env_fn):
