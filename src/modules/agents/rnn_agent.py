@@ -12,7 +12,13 @@ class RNNAgent(nn.Module):
             self.rnn = nn.GRUCell(args.hidden_dim, args.hidden_dim)
         else:
             self.rnn = nn.Linear(args.hidden_dim, args.hidden_dim)
-        self.fc2 = nn.Linear(args.hidden_dim, args.n_actions)
+
+        # If we're using multi-horizon learning, create gamma head for each output
+        if args.use_mh:
+            for i in range(self.args.num_gammas):
+                setattr(self, "gamma_head_{}".format(i),nn.Linear(args.hidden_dim, args.n_actions),)
+        else:
+            self.fc2 = nn.Linear(args.hidden_dim, args.n_actions)
 
     def init_hidden(self):
         # make hidden states on same device as model
@@ -25,6 +31,13 @@ class RNNAgent(nn.Module):
             h = self.rnn(x, h_in)
         else:
             h = F.relu(self.rnn(x))
-        q = self.fc2(h)
-        return q, h
-
+        
+        # Compute q_val for each gamma head, then output as list
+        if self.args.use_mh:
+            q_vals = [None] * self.args.num_gammas
+            for i in range(self.args.num_gammas):
+                q_vals[i] = getattr(self, 'gamma_head_{}'.format(i))(h)
+            return q_vals, h
+        else:
+            q = self.fc2(h)
+            return q, h
