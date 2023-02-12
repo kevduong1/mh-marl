@@ -1,7 +1,8 @@
 from modules.agents import REGISTRY as agent_REGISTRY
 from components.action_selectors import REGISTRY as action_REGISTRY
 import torch as th
-
+import math
+from components.multi_horizon import compute_eval_gamma_interval, integrate_q_values
 
 # This multi-agent controller shares parameters between agents
 class BasicMAC:
@@ -16,6 +17,18 @@ class BasicMAC:
 
         self.hidden_states = None
 
+        # initialize gammas if we use multi-horizon learning
+        self.use_mh = args.use_mh
+        if self.use_mh:
+            self.integral_estimate = args.integral_estimate
+            self.acting_policy = args.acting_policy
+            self.eval_gammas = compute_eval_gamma_interval(args.gamma_max, args.hyp_exp, args.num_gammas)
+            self.gammas = [
+                math.pow(gamma, args.hyp_exp) for gamma in self.eval_gammas
+            ]
+            print(self.gammas)
+            print("Gammas")
+
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         # Only select actions for the selected batch elements in bs
         avail_actions = ep_batch["avail_actions"][:, t_ep]
@@ -23,13 +36,23 @@ class BasicMAC:
         chosen_actions = self.action_selector.select_action(agent_outputs[bs], avail_actions[bs], t_env, test_mode=test_mode)
         return chosen_actions
 
-    def forward(self, ep_batch, t, test_mode=False):
+    def forward(self, ep_batch, t, test_mode=False, learning_mode=False):
         agent_inputs = self._build_inputs(ep_batch, t)
         avail_actions = ep_batch["avail_actions"][:, t]
         agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
 
+        # Agent_outs shape = (num_agents, q_vals)
+        # TODO (IMPORTANT) see if we should perform hyperbolic before or after pi-logits
+        if self.use_mh:
+            # we keep list of separate gamma q vals for training during learning mode
+            if learning_mode:
+                return [agent_out.view(ep_batch.batch_size, self.n_agents, -1) for agent_out in agent_outs]
+            elif self.acting_policy == "hyperbolic":
+                agent_outs = integrate_q_values(agent_outs, self.integral_estimate, self.eval_gammas, len(self.eval_gammas), self.gammas)
+            elif self.acting_policy == "largest":
+                agent_outs = agent_outs[-1]
         # Softmax the agent outputs if they're policy logits
-        if self.agent_output_type == "pi_logits":
+        if self.agent_output_type == "pi_logits": # TODO: Don't have to deal with this for now with iql
 
             if getattr(self.args, "mask_before_softmax", True):
                 # Make the logits for unavailable actions very negative to minimise their affect on the softmax

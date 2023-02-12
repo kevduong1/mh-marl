@@ -1,5 +1,5 @@
 import math
-
+import torch
 def compute_eval_gamma_interval(gamma_max, hyp_exponent, number_of_gammas):
   r"""This method computes the eval_gammas intervals.
   These are the non-exponentiated gammas.  We produce this eval_gammas
@@ -51,7 +51,8 @@ def integrate_q_values(q_values, integral_estimate, eval_gammas,
   Returns:
     integral:  Scalar estimate of the integral.
   """
-  integral = 0.
+  # adjusting integral to shape of multi-agent tensors
+  integral = torch.zeros(q_values[0].shape).to("cuda:0")
 
   if integral_estimate == 'lower':
     gamma_plus_one = eval_gammas + [1.]
@@ -80,4 +81,4 @@ def integrate_q_values(q_values, integral_estimate, eval_gammas,
       integral += w * q_val
   else:
     raise NotImplementedError
-  return 
+  return integral
