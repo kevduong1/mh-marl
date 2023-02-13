@@ -29,4 +29,12 @@ double_q: True
 use_rnn: False
 mixer: "vdn"
 
+# Multi-horizon params
+use_mh: False
+num_gammas: 5
+gamma_max: 0.99
+hyp_exp: 0.1
+integral_estimate: "lower"
+acting_policy: "hyperbolic"
+
 name: "vdn"
