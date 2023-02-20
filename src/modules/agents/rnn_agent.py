@@ -3,9 +3,12 @@ import torch.nn.functional as F
 
 
 class RNNAgent(nn.Module):
-    def __init__(self, input_shape, args):
+    def __init__(self, input_shape, args, use_mh_actor):
         super(RNNAgent, self).__init__()
         self.args = args
+
+        # For algos like PPO, and A2C, we implement Multi-Horizon learning in the critic instead of the actor network
+        self.use_mh_actor = use_mh_actor
 
         self.fc1 = nn.Linear(input_shape, args.hidden_dim)
         if self.args.use_rnn:
@@ -13,8 +16,8 @@ class RNNAgent(nn.Module):
         else:
             self.rnn = nn.Linear(args.hidden_dim, args.hidden_dim)
 
-        # If we're using multi-horizon learning, create gamma head for each output
-        if args.use_mh:
+        # If we're using multi-horizon learning, create gamma head for each output for our actor
+        if self.use_mh_actor:
             for i in range(self.args.num_gammas):
                 setattr(self, "gamma_head_{}".format(i),nn.Linear(args.hidden_dim, args.n_actions),)
         else:
@@ -33,7 +36,7 @@ class RNNAgent(nn.Module):
             h = F.relu(self.rnn(x))
         
         # Compute q_val for each gamma head, then output as list
-        if self.args.use_mh:
+        if self.use_mh_actor:
             q_vals = [None] * self.args.num_gammas
             for i in range(self.args.num_gammas):
                 q_vals[i] = getattr(self, 'gamma_head_{}'.format(i))(h)
