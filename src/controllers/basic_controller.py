@@ -10,6 +10,11 @@ class BasicMAC:
         self.n_agents = args.n_agents
         self.args = args
         input_shape = self._get_input_shape(scheme)
+
+        # Flag decides if we implement MH for actor network or critic network
+        self.use_mh_actor = args.use_mh and (args.learner == "q_learner") # TODO might have to change this if we decide to change QMIX implementation
+        print("use_mh_actor set to:" + str(self.use_mh_actor))
+
         self._build_agents(input_shape)
         self.agent_output_type = args.agent_output_type
 
@@ -17,9 +22,7 @@ class BasicMAC:
 
         self.hidden_states = None
 
-        # initialize gammas if we use multi-horizon learning
-        self.use_mh = args.use_mh
-        if self.use_mh:
+        if args.use_mh:
             self.integral_estimate = args.integral_estimate
             self.acting_policy = args.acting_policy
             self.eval_gammas = compute_eval_gamma_interval(args.gamma_max, args.hyp_exp, args.num_gammas)
@@ -41,18 +44,18 @@ class BasicMAC:
         avail_actions = ep_batch["avail_actions"][:, t]
         agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
 
-        # Agent_outs shape = (num_agents, q_vals)
-        # TODO (IMPORTANT) see if we should perform hyperbolic before or after pi-logits
-        if self.use_mh:
-            # we keep list of separate gamma q vals for training during learning mode
-            if learning_mode:
+        if self.use_mh_actor:
+            if learning_mode: # we keep list of separate gamma q vals for training during learning mode
                 return [agent_out.view(ep_batch.batch_size, self.n_agents, -1) for agent_out in agent_outs]
             elif self.acting_policy == "hyperbolic":
                 agent_outs = integrate_q_values(agent_outs, self.integral_estimate, self.eval_gammas, len(self.eval_gammas), self.gammas)
             elif self.acting_policy == "largest":
                 agent_outs = agent_outs[-1]
+            else:
+                raise NotImplementedError
+
         # Softmax the agent outputs if they're policy logits
-        if self.agent_output_type == "pi_logits": # TODO: Don't have to deal with this for now with iql
+        if self.agent_output_type == "pi_logits":
 
             if getattr(self.args, "mask_before_softmax", True):
                 # Make the logits for unavailable actions very negative to minimise their affect on the softmax
@@ -81,7 +84,9 @@ class BasicMAC:
         self.agent.load_state_dict(th.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
     def _build_agents(self, input_shape):
-        self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
+        # if we use Multi-Horizon for algorithms such as PPO, and A2C
+        # we implement multiple-gamma heads in the critic instead of the actor
+        self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args, use_mh_actor=self.use_mh_actor)
 
     def _build_inputs(self, batch, t):
         # Assumes homogenous agents with flat observations.

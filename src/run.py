@@ -207,11 +207,7 @@ def run_sequential(args, logger):
             if episode_sample.device != args.device:
                 episode_sample.to(args.device)
             
-            # TODO: Combine MH trainer into regular trainer for less code complexity
-            if args.use_mh:
-                learner.train_mh(episode_sample, runner.t_env, episode)
-            else:
-                learner.train(episode_sample, runner.t_env, episode)
+            learner.train(episode_sample, runner.t_env, episode)
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)

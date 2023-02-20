@@ -7,7 +7,7 @@ import torch as th
 from torch.optim import Adam
 from modules.critics import REGISTRY as critic_resigtry
 from components.standarize_stream import RunningMeanStd
-
+from components.multi_horizon import integrate_q_values
 
 class PPOLearner:
     def __init__(self, mac, scheme, logger, args):
@@ -83,7 +83,7 @@ class PPOLearner:
             pi = mac_out
             advantages, critic_train_stats = self.train_critic_sequential(self.critic, self.target_critic, batch, rewards,
                                                                           critic_mask)
-            advantages = advantages.detach()
+            #advantages = advantages.detach()
             # Calculate policy grad with mask
 
             pi[mask == 0] = 1.0
@@ -116,7 +116,10 @@ class PPOLearner:
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             ts_logged = len(critic_train_stats["critic_loss"])
-            for key in ["critic_loss", "critic_grad_norm", "td_error_abs", "q_taken_mean", "target_mean"]:
+            # for key in ["critic_loss", "critic_grad_norm", "td_error_abs", "q_taken_mean", "target_mean"]:
+            #     self.logger.log_stat(key, sum(critic_train_stats[key]) / ts_logged, t_env)
+
+            for key in ["critic_loss", "critic_grad_norm"]:
                 self.logger.log_stat(key, sum(critic_train_stats[key]) / ts_logged, t_env)
 
             self.logger.log_stat("advantage_mean", (advantages * mask).sum().item() / mask.sum().item(), t_env)
@@ -127,46 +130,86 @@ class PPOLearner:
 
     def train_critic_sequential(self, critic, target_critic, batch, rewards, mask):
         # Optimise critic
+
+        target_gamma_vals = []
+        v_gamma_vals = []
+        masked_td_error_gamma_lists = []
+        v_out = critic(batch)
+        total_loss = None
         with th.no_grad():
-            target_vals = target_critic(batch)
-            target_vals = target_vals.squeeze(3)
+            t_val_out = target_critic(batch)
 
-        if self.args.standardise_returns:
-            target_vals = target_vals * th.sqrt(self.ret_ms.var) + self.ret_ms.mean
-
-        target_returns = self.nstep_returns(rewards, mask, target_vals, self.args.q_nstep)
-        if self.args.standardise_returns:
-            self.ret_ms.update(target_returns)
-            target_returns = (target_returns - self.ret_ms.mean) / th.sqrt(self.ret_ms.var)
+        if self.args.use_mh:
+            target_gamma_vals = t_val_out
+            v_gamma_vals = v_out
+            gammas = self.mac.gammas
+        else:
+            # We append if non_mh because it returns just the values for a single gamma
+            # but our logic is built to handle lists so we can handle multiple gammas
+            target_gamma_vals.append(t_val_out)
+            v_gamma_vals.append(v_out)
+            gammas = [self.args.gamma]
 
         running_log = {
             "critic_loss": [],
             "critic_grad_norm": [],
-            "td_error_abs": [],
-            "target_mean": [],
-            "q_taken_mean": [],
+            #"td_error_abs": [],
+            #"target_mean": [],
+            #"q_taken_mean": [],
         }
+        
+        for i, gamma in zip(range(len(gammas)), gammas):
+            target_vals = target_gamma_vals[i].squeeze(3)
+            v = v_gamma_vals[i][:, :-1].squeeze(3)
 
-        v = critic(batch)[:, :-1].squeeze(3)
-        td_error = (target_returns.detach() - v)
-        masked_td_error = td_error * mask
-        loss = (masked_td_error ** 2).sum() / mask.sum()
 
+            if self.args.standardise_returns:
+                target_vals = target_vals * th.sqrt(self.ret_ms.var) + self.ret_ms.mean
+
+            target_returns = self.nstep_returns(rewards, mask, target_vals, self.args.q_nstep, gamma)
+            if self.args.standardise_returns:
+                self.ret_ms.update(target_returns)
+                target_returns = (target_returns - self.ret_ms.mean) / th.sqrt(self.ret_ms.var)
+
+            td_error = (target_returns.detach() - v)
+            masked_td_error = td_error * mask
+            masked_td_error_gamma_lists.append(masked_td_error.detach())
+
+            if total_loss == None:
+                total_loss = (masked_td_error ** 2).sum() / mask.sum()
+            else:
+                total_loss += (masked_td_error ** 2).sum() / mask.sum()
+
+        # Divide to preserve scale
+        total_loss /= len(gammas)
         self.critic_optimiser.zero_grad()
-        loss.backward()
+        total_loss.backward()
         grad_norm = th.nn.utils.clip_grad_norm_(self.critic_params, self.args.grad_norm_clip)
         self.critic_optimiser.step()
 
-        running_log["critic_loss"].append(loss.item())
+        running_log["critic_loss"].append(total_loss.item())
         running_log["critic_grad_norm"].append(grad_norm.item())
-        mask_elems = mask.sum().item()
-        running_log["td_error_abs"].append((masked_td_error.abs().sum().item() / mask_elems))
-        running_log["q_taken_mean"].append((v * mask).sum().item() / mask_elems)
-        running_log["target_mean"].append((target_returns * mask).sum().item() / mask_elems)
+        #mask_elems = mask.sum().item()
+        #running_log["td_error_abs"].append((masked_td_error.abs().sum().item() / mask_elems))
+        #running_log["q_taken_mean"].append((v * mask).sum().item() / mask_elems)
+        #running_log["target_mean"].append((target_returns * mask).sum().item() / mask_elems)
 
+        if self.args.acting_policy == "largest": # Return largest gamma-head advantage
+            masked_td_error = masked_td_error_gamma_lists[-1]
+        elif self.args.acting_policy == "average": # Return averaged advantage from all gamma heads
+            masked_td_error_gamma_tensor = th.stack(masked_td_error_gamma_lists, dim=0)
+            masked_td_error = th.sum(masked_td_error_gamma_tensor, dim=0) / len(gammas)
+        elif self.args.acting_policy == "hyperbolic": # Return hyperbolic advantage
+            masked_td_error = integrate_q_values(masked_td_error_gamma_lists, self.mac.integral_estimate, self.mac.eval_gammas, len(self.mac.eval_gammas), self.mac.gammas)
+        elif self.args.acting_policy == "single": # Just return the single advantage from the single gamma head
+            masked_td_error = masked_td_error_gamma_lists[0]
+        else:
+            raise NotImplementedError
+
+        masked_td_error_gamma_lists.clear()
         return masked_td_error, running_log
 
-    def nstep_returns(self, rewards, mask, values, nsteps):
+    def nstep_returns(self, rewards, mask, values, nsteps, gamma):
         nstep_values = th.zeros_like(values[:, :-1])
         for t_start in range(rewards.size(1)):
             nstep_return_t = th.zeros_like(values[:, 0])
@@ -175,12 +218,12 @@ class PPOLearner:
                 if t >= rewards.size(1):
                     break
                 elif step == nsteps:
-                    nstep_return_t += self.args.gamma ** (step) * values[:, t] * mask[:, t]
+                    nstep_return_t += gamma ** (step) * values[:, t] * mask[:, t]
                 elif t == rewards.size(1) - 1 and self.args.add_value_last_step:
-                    nstep_return_t += self.args.gamma ** (step) * rewards[:, t] * mask[:, t]
-                    nstep_return_t += self.args.gamma ** (step + 1) * values[:, t + 1]
+                    nstep_return_t += gamma ** (step) * rewards[:, t] * mask[:, t]
+                    nstep_return_t += gamma ** (step + 1) * values[:, t + 1]
                 else:
-                    nstep_return_t += self.args.gamma ** (step) * rewards[:, t] * mask[:, t]
+                    nstep_return_t += gamma ** (step) * rewards[:, t] * mask[:, t]
             nstep_values[:, t_start, :] = nstep_return_t
         return nstep_values
 
