@@ -1,4 +1,6 @@
-wandb docker-run --gpus device=2 -ti kevduong1/mh-marl:1.0 \
+#!/bin/bash
+
+wandb docker-run --gpus device=0 -ti mh-marl:1.0 \
     --config=iql_ns --env-config=pettingzoo with \
     epsilon_anneal_time=5000000 \
     hidden_dim=128 lr=0.0005 target_update_interval_or_tau=0.01 \

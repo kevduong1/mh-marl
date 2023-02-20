@@ -15,6 +15,14 @@ from controllers import REGISTRY as mac_REGISTRY
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 
+def close_script(logger):
+    logger.finish()
+    print("Exiting script in 15 seconds")
+    # Waiting for thread clean up, and wandb to log everything properly
+    time.sleep(15)
+    print("Exit complete")
+    # Add logger code
+    os._exit(os.EX_OK)
 
 def run(_run, _config, _log):
 
@@ -68,10 +76,10 @@ def run(_run, _config, _log):
             t.join(timeout=1)
             print("Thread joined")
 
-    print("Exiting script")
-
     # Making sure framework really exits
-    # os._exit(os.EX_OK)
+    thread = threading.Thread(target=close_script, args=(logger,))
+    thread.start()
+    thread.join()
 
 
 def evaluate_sequential(args, runner):
@@ -198,8 +206,12 @@ def run_sequential(args, logger):
 
             if episode_sample.device != args.device:
                 episode_sample.to(args.device)
-
-            learner.train(episode_sample, runner.t_env, episode)
+            
+            # TODO: Combine MH trainer into regular trainer for less code complexity
+            if args.use_mh:
+                learner.train_mh(episode_sample, runner.t_env, episode)
+            else:
+                learner.train(episode_sample, runner.t_env, episode)
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)

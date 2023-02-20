@@ -1,6 +1,5 @@
 absl-py
 attrs
-gym==0.21.0
 idna==2.7
 imageio
 lbforaging
@@ -38,4 +37,7 @@ websocket-client==0.53.0
 whichcraft==0.5.2
 wrapt==1.10.11
 wandb
+pettingzoo[all]==1.22.2
+supersuit==3.7.0
+gym==0.21.0
 git+https://github.com/oxwhirl/smac.git

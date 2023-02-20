@@ -23,14 +23,24 @@ class Logger:
     def setup_sacred(self, sacred_run_dict):
         self._run_obj = sacred_run_dict
         self.sacred_info = sacred_run_dict.info
-        self.use_sacred = True
+        self.use_sacred = False # Disabling sacred since we use wandb
     
     def setup_wandb(self, configs):
         import wandb
-        self.wandb = wandb.init(group=configs["wandb_args"]["group"], project=configs["wandb_args"]["project"], entity="kdd-marl", config=configs,
+        if configs["use_mh"] == False:
+            configs["acting_policy"] = "single"
+            configs["num_gammas"] = 1
+            configs["hyp_exp"] = None
+            configs["integral_estimate"] = None
+
+        run_name = "{}_{}_seed:{}".format(configs["name"],configs["acting_policy"], configs["env_args"]["seed"])
+
+        self.wandb = wandb.init(group=configs["wandb_args"]["group"], name=run_name, project=configs["wandb_args"]["project"], entity="kdd-drl", config=configs,
                                 tags=[configs["wandb_args"]["tag"]] if configs["wandb_args"]["tag"] else None )
-        # TODO: add run names (ask Farrukh about convention)
         
+    def finish(self):
+        if self.wandb != None:
+            self.wandb.finish()
 
     def log_stat(self, key, value, t, to_sacred=True):
         self.stats[key].append((t, value))
