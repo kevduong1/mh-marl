@@ -51,6 +51,9 @@ class BasicMAC:
                 agent_outs = integrate_q_values(agent_outs, self.integral_estimate, self.eval_gammas, len(self.eval_gammas), self.gammas)
             elif self.acting_policy == "largest":
                 agent_outs = agent_outs[-1]
+            elif self.acting_policy == "average":
+                agent_outs = th.stack(agent_outs, dim=0)
+                agent_outs = th.sum(agent_outs, dim=0) / len(self.gammas)
             else:
                 raise NotImplementedError
 

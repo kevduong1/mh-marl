@@ -6,7 +6,7 @@ import torch as th
 from torch.optim import Adam
 from modules.critics import REGISTRY as critic_registry
 from components.standarize_stream import RunningMeanStd
-
+from components.multi_horizon import integrate_q_values
 class COMALearner:
     def __init__(self, mac, scheme, logger, args):
         self.args = args
@@ -98,7 +98,7 @@ class COMALearner:
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             ts_logged = len(critic_train_stats["critic_loss"])
-            for key in ["critic_loss", "critic_grad_norm", "td_error_abs", "q_taken_mean", "target_mean"]:
+            for key in ["critic_loss", "critic_grad_norm"]:
                 self.logger.log_stat(key, sum(critic_train_stats[key])/ts_logged, t_env)
 
             self.logger.log_stat("advantage_mean", (advantages * mask).sum().item() / mask.sum().item(), t_env)
@@ -109,51 +109,82 @@ class COMALearner:
 
     def _train_critic(self, batch, rewards, terminated, actions, avail_actions, mask, bs, max_t):
         # Optimise critic
+
+        output_q_vals = []
         with th.no_grad():
-            target_q_vals = self.target_critic(batch)
+            target_q_vals_list = self.target_critic(batch)
+        q_vals_list = self.critic(batch)
 
-        targets_taken = th.gather(target_q_vals, dim=3, index=actions).squeeze(3)
+        if self.args.use_mh:
+            gammas = self.mac.gammas
+        else:
+            target_q_vals_list = [target_q_vals_list]
+            q_vals_list = [q_vals_list]
+            gammas = [self.args.gamma]
 
-        if self.args.standardise_returns:
-            targets_taken = targets_taken * th.sqrt(self.ret_ms.var) + self.ret_ms.mean
-
-        targets = self.nstep_returns(rewards, mask, targets_taken, self.args.q_nstep)
-
-        if self.args.standardise_returns:
-            self.ret_ms.update(targets)
-            targets = (targets - self.ret_ms.mean) / th.sqrt(self.ret_ms.var)
-
-        running_log = {
-            "critic_loss": [],
-            "critic_grad_norm": [],
-            "td_error_abs": [],
-            "target_mean": [],
-            "q_taken_mean": [],
-        }
-
+        total_loss = None
+        # with th.no_grad():
+        #     target_q_vals = self.target_critic(batch)
+        og_actions = actions
         actions = actions[:, :-1]
-        q_vals = self.critic(batch)[:, :-1]
-        q_taken = th.gather(q_vals, dim=3, index=actions).squeeze(3)
+        for i, gamma in zip(range(len(gammas)),gammas):
+            targets_taken = th.gather(target_q_vals_list[i], dim=3, index=og_actions).squeeze(3)
+            if self.args.standardise_returns:
+                targets_taken = targets_taken * th.sqrt(self.ret_ms.var) + self.ret_ms.mean
 
-        td_error = (q_taken - targets.detach())
-        masked_td_error = td_error * mask
+            targets = self.nstep_returns(rewards, mask, targets_taken, self.args.q_nstep, gamma)
 
-        loss = (masked_td_error ** 2).sum() / mask.sum()
+            if self.args.standardise_returns:
+                self.ret_ms.update(targets)
+                targets = (targets - self.ret_ms.mean) / th.sqrt(self.ret_ms.var)
+
+            running_log = {
+                "critic_loss": [],
+                "critic_grad_norm": [],
+                # "td_error_abs": [],
+                # "target_mean": [],
+                # "q_taken_mean": [],
+            }
+
+            
+            output_q = q_vals_list[i][:, :-1]
+            output_q_vals.append(output_q) # TODO: see if we need detach() here
+            q_taken = th.gather(output_q, dim=3, index=actions).squeeze(3)
+
+            td_error = (q_taken - targets.detach())
+            masked_td_error = td_error * mask
+            
+            if total_loss == None:
+                total_loss = (masked_td_error ** 2).sum() / mask.sum()
+            else:
+                total_loss += (masked_td_error ** 2).sum() / mask.sum()
+
         self.critic_optimiser.zero_grad()
-        loss.backward()
+        total_loss.backward()
         grad_norm = th.nn.utils.clip_grad_norm_(self.critic_params, self.args.grad_norm_clip)
         self.critic_optimiser.step()
 
-        running_log["critic_loss"].append(loss.item())
+        running_log["critic_loss"].append(total_loss.item())
         running_log["critic_grad_norm"].append(grad_norm.item())
-        mask_elems = mask.sum().item()
-        running_log["td_error_abs"].append((masked_td_error.abs().sum().item() / mask_elems))
-        running_log["q_taken_mean"].append((q_taken * mask).sum().item() / mask_elems)
-        running_log["target_mean"].append((targets * mask).sum().item() / mask_elems)
+        # mask_elems = mask.sum().item()
+        # running_log["td_error_abs"].append((masked_td_error.abs().sum().item() / mask_elems))
+        # running_log["q_taken_mean"].append((q_taken * mask).sum().item() / mask_elems)
+        # running_log["target_mean"].append((targets * mask).sum().item() / mask_elems)
+        if self.args.acting_policy == "largest": # Return largest gamma-head advantage
+            output = output_q_vals[-1]
+        elif self.args.acting_policy == "average": # Return averaged advantage from all gamma heads
+            stacked_qs = th.stack(output_q_vals, dim=0)
+            output = th.sum(stacked_qs, dim=0) / len(gammas)
+        elif self.args.acting_policy == "hyperbolic": # Return hyperbolic advantage
+            output = integrate_q_values(output_q_vals, self.mac.integral_estimate, self.mac.eval_gammas, len(self.mac.eval_gammas), self.mac.gammas)
+        elif self.args.acting_policy == "single": # Just return the single advantage from the single gamma head
+            output = output_q_vals[0]
+        else:
+            raise NotImplementedError
 
-        return q_vals, running_log
+        return output, running_log
 
-    def nstep_returns(self, rewards, mask, values, nsteps):
+    def nstep_returns(self, rewards, mask, values, nsteps, gamma):
         nstep_values = th.zeros_like(values[:, :-1])
         for t_start in range(rewards.size(1)):
             nstep_return_t = th.zeros_like(values[:, 0])
@@ -162,12 +193,12 @@ class COMALearner:
                 if t >= rewards.size(1):
                     break
                 elif step == nsteps:
-                    nstep_return_t += self.args.gamma ** step * values[:, t] * mask[:, t]
+                    nstep_return_t += gamma ** step * values[:, t] * mask[:, t]
                 elif t == rewards.size(1) - 1 and self.args.add_value_last_step:
-                    nstep_return_t += self.args.gamma ** step * rewards[:, t] * mask[:, t]
-                    nstep_return_t += self.args.gamma ** (step + 1) * values[:, t + 1]
+                    nstep_return_t += gamma ** step * rewards[:, t] * mask[:, t]
+                    nstep_return_t += gamma ** (step + 1) * values[:, t + 1]
                 else:
-                    nstep_return_t += self.args.gamma ** (step) * rewards[:, t] * mask[:, t]
+                    nstep_return_t += gamma ** (step) * rewards[:, t] * mask[:, t]
             nstep_values[:, t_start, :] = nstep_return_t
         return nstep_values
 
