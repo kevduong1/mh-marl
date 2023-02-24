@@ -1,4 +1,4 @@
 #!/bin/bash
 
-echo 'Building DockerFile with image name mh-marl:1.0'
-docker build -t mh-marl:1.0 .
+echo 'Building DockerFile with image name kevduong1/mh-marl:mh'
+docker build -t kevduong1/mh-marl:mh .

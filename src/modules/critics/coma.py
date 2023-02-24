@@ -17,14 +17,27 @@ class COMACritic(nn.Module):
         # Set up network layers
         self.fc1 = nn.Linear(input_shape, args.hidden_dim)
         self.fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
-        self.fc3 = nn.Linear(args.hidden_dim, self.n_actions)
+
+        # Initialize state q-value heads for each gamma for multi-horizon learning
+        if self.args.use_mh:
+            for i in range(self.args.num_gammas):
+                setattr(self, "gamma_head_{}".format(i),nn.Linear(args.hidden_dim, self.n_actions),)
+        else:
+            self.fc3 = nn.Linear(args.hidden_dim, self.n_actions)
 
     def forward(self, batch, t=None):
         inputs = self._build_inputs(batch, t=t)
         x = F.relu(self.fc1(inputs))
         x = F.relu(self.fc2(x))
-        q = self.fc3(x)
-        return q
+
+        if self.args.use_mh:
+            q_vals = [None] * self.args.num_gammas
+            for i in range(self.args.num_gammas):
+                q_vals[i] = getattr(self, 'gamma_head_{}'.format(i))(x)
+            return q_vals
+        else:
+            q = self.fc3(x)
+            return q
 
     def _build_inputs(self, batch, t=None):
         bs = batch.batch_size
