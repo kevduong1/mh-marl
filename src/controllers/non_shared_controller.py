@@ -4,6 +4,7 @@ import torch as th
 
 class NonSharedMAC:
     def __init__(self, scheme, groups, args):
+        self.use_mh_actor = args.use_mh and (args.learner == "q_learner") # TODO might have to change this if we decide to change QMIX implementation
         self.n_agents = args.n_agents
         self.args = args
         input_shape = self._get_input_shape(scheme)
@@ -21,7 +22,7 @@ class NonSharedMAC:
         chosen_actions = self.action_selector.select_action(agent_outputs[bs], avail_actions[bs], t_env, test_mode=test_mode)
         return chosen_actions
 
-    def forward(self, ep_batch, t, test_mode=False):
+    def forward(self, ep_batch, t, test_mode=False, learning_mode=False):
         agent_inputs = self._build_inputs(ep_batch, t)
         avail_actions = ep_batch["avail_actions"][:, t]
         agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
@@ -56,7 +57,7 @@ class NonSharedMAC:
         self.agent.load_state_dict(th.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
     def _build_agents(self, input_shape):
-        self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
+        self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args, use_mh_actor=self.use_mh_actor)
 
     def _build_inputs(self, batch, t):
         # Assumes homogenous agents with flat observations.

@@ -3,12 +3,12 @@ from modules.agents.rnn_agent import RNNAgent
 import torch as th
 
 class RNNNSAgent(nn.Module):
-    def __init__(self, input_shape, args):
+    def __init__(self, input_shape, args, use_mh_actor):
         super(RNNNSAgent, self).__init__()
         self.args = args
         self.n_agents = args.n_agents
         self.input_shape = input_shape
-        self.agents = th.nn.ModuleList([RNNAgent(input_shape, args) for _ in range(self.n_agents)])
+        self.agents = th.nn.ModuleList([RNNAgent(input_shape, args, use_mh_actor) for _ in range(self.n_agents)])
 
     def init_hidden(self):
         # make hidden states on same device as model
