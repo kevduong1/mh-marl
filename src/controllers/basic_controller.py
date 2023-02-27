@@ -24,7 +24,7 @@ class BasicMAC:
 
         if args.use_mh:
             self.integral_estimate = args.integral_estimate
-            self.acting_policy = args.acting_policy
+            self.discounting_policy = args.discounting_policy
             self.eval_gammas = compute_eval_gamma_interval(args.gamma_max, args.hyp_exp, args.num_gammas)
             self.gammas = [
                 math.pow(gamma, args.hyp_exp) for gamma in self.eval_gammas
@@ -47,11 +47,11 @@ class BasicMAC:
         if self.use_mh_actor:
             if learning_mode: # we keep list of separate gamma q vals for training during learning mode
                 return [agent_out.view(ep_batch.batch_size, self.n_agents, -1) for agent_out in agent_outs]
-            elif self.acting_policy == "hyperbolic":
+            elif self.discounting_policy == "hyperbolic":
                 agent_outs = integrate_q_values(agent_outs, self.integral_estimate, self.eval_gammas, len(self.eval_gammas), self.gammas)
-            elif self.acting_policy == "largest":
+            elif self.discounting_policy == "largest":
                 agent_outs = agent_outs[-1]
-            elif self.acting_policy == "average":
+            elif self.discounting_policy == "average":
                 agent_outs = th.stack(agent_outs, dim=0)
                 agent_outs = th.sum(agent_outs, dim=0) / len(self.gammas)
             else:

@@ -194,14 +194,14 @@ class PPOLearner:
         #running_log["q_taken_mean"].append((v * mask).sum().item() / mask_elems)
         #running_log["target_mean"].append((target_returns * mask).sum().item() / mask_elems)
 
-        if self.args.acting_policy == "largest": # Return largest gamma-head advantage
+        if self.args.discounting_policy == "largest": # Return largest gamma-head advantage
             masked_td_error = masked_td_error_gamma_lists[-1]
-        elif self.args.acting_policy == "average": # Return averaged advantage from all gamma heads
+        elif self.args.discounting_policy == "average": # Return averaged advantage from all gamma heads
             masked_td_error_gamma_tensor = th.stack(masked_td_error_gamma_lists, dim=0)
             masked_td_error = th.sum(masked_td_error_gamma_tensor, dim=0) / len(gammas)
-        elif self.args.acting_policy == "hyperbolic": # Return hyperbolic advantage
+        elif self.args.discounting_policy == "hyperbolic": # Return hyperbolic advantage
             masked_td_error = integrate_q_values(masked_td_error_gamma_lists, self.mac.integral_estimate, self.mac.eval_gammas, len(self.mac.eval_gammas), self.mac.gammas)
-        elif self.args.acting_policy == "single": # Just return the single advantage from the single gamma head
+        elif self.args.discounting_policy == "single": # Just return the single advantage from the single gamma head
             masked_td_error = masked_td_error_gamma_lists[0]
         else:
             raise NotImplementedError

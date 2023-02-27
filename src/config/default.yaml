@@ -49,7 +49,7 @@ num_gammas: 3
 gamma_max: 0.99
 hyp_exp: 0.1
 integral_estimate: "lower"
-acting_policy: "hyperbolic"
+discounting_policy: "hyperbolic"
 
 # --- Experiment running params ---
 repeat_id: 1

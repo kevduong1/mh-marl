@@ -170,14 +170,14 @@ class COMALearner:
         # running_log["td_error_abs"].append((masked_td_error.abs().sum().item() / mask_elems))
         # running_log["q_taken_mean"].append((q_taken * mask).sum().item() / mask_elems)
         # running_log["target_mean"].append((targets * mask).sum().item() / mask_elems)
-        if self.args.acting_policy == "largest": # Return largest gamma-head advantage
+        if self.args.discounting_policy == "largest": # Return largest gamma-head advantage
             output = output_q_vals[-1]
-        elif self.args.acting_policy == "average": # Return averaged advantage from all gamma heads
+        elif self.args.discounting_policy == "average": # Return averaged advantage from all gamma heads
             stacked_qs = th.stack(output_q_vals, dim=0)
             output = th.sum(stacked_qs, dim=0) / len(gammas)
-        elif self.args.acting_policy == "hyperbolic": # Return hyperbolic advantage
+        elif self.args.discounting_policy == "hyperbolic": # Return hyperbolic advantage
             output = integrate_q_values(output_q_vals, self.mac.integral_estimate, self.mac.eval_gammas, len(self.mac.eval_gammas), self.mac.gammas)
-        elif self.args.acting_policy == "single": # Just return the single advantage from the single gamma head
+        elif self.args.discounting_policy == "single": # Just return the single advantage from the single gamma head
             output = output_q_vals[0]
         else:
             raise NotImplementedError
