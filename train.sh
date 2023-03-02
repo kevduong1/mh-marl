@@ -1,8 +1,11 @@
 #!/bin/bash
 
-wandb docker-run --gpus device=0 -ti mh-marl:1.0 \
-    --config=iql_ns --env-config=pettingzoo with \
-    epsilon_anneal_time=5000000 \
-    hidden_dim=128 lr=0.0005 target_update_interval_or_tau=0.01 \
-    env_args.time_limit=500 t_max=10000000 env_args.key="None" \
-    wandb_args.project="mh-v1" wandb_args.tag="idql_ns" wandb_args.group="kaz" seed=10002
+python src/main.py \
+    --config=mhmix --env-config=gymma with \
+    hidden_dim=64 lr=0.0003 evaluation_epsilon=0.05 epsilon_anneal_time=200000 \
+    target_update_interval_or_tau=10 use_rnn=True use_mh=False num_gammas=3 hyp_exp=0.1 discounting_policy="single" \
+    standardise_rewards=True standardise_returns=False \
+    test_interval=10000 log_interval=10000 \
+    runner_log_interval=2000 learner_log_interval=2000 \
+    env_args.time_limit=25 t_max=2050000 env_args.key="lbforaging:Foraging-15x15-4p-3f-v2" \
+    use_wandb=False wandb_args.project="f" wandb_args.group="f" wandb_args.tag="f" seed="12"

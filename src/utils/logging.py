@@ -28,12 +28,12 @@ class Logger:
     def setup_wandb(self, configs):
         import wandb
         if configs["use_mh"] == False:
-            configs["acting_policy"] = "single"
+            configs["discounting_policy"] = "single"
             configs["num_gammas"] = 1
             configs["hyp_exp"] = None
             configs["integral_estimate"] = None
 
-        run_name = "{}_{}_seed:{}".format(configs["name"],configs["acting_policy"], configs["env_args"]["seed"])
+        run_name = "{}_{}_seed:{}".format(configs["name"],configs["discounting_policy"], configs["env_args"]["seed"])
 
         self.wandb = wandb.init(group=configs["wandb_args"]["group"], name=run_name, project=configs["wandb_args"]["project"], entity="kdd-drl", config=configs,
                                 tags=[configs["wandb_args"]["tag"]] if configs["wandb_args"]["tag"] else None )

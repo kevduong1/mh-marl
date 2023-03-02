@@ -1,7 +1,7 @@
 import copy
 from components.episode_buffer import EpisodeBatch
 from modules.mixers.vdn import VDNMixer
-from modules.mixers.qmix import QMixer
+from modules.mh_mixers.qmix import QMixer
 import torch as th
 from torch.optim import Adam
 from components.standarize_stream import RunningMeanStd
@@ -18,14 +18,21 @@ class QLearner:
 
         self.mixer = None
         if args.mixer is not None:
-            if args.mixer == "vdn":
-                self.mixer = VDNMixer()
-            elif args.mixer == "qmix":
-                self.mixer = QMixer(args)
+            if args.mixer == "qmix":
+                # Creating mixers for each gamma q's (if using mh)
+                if args.use_mh:
+                    self.mixer = [None] * args.num_gammas
+                    self.target_mixer = [None] * args.num_gammas
+                    for i in range(args.num_gammas):
+                        self.mixer[i] = QMixer(args)
+                        self.params += list(self.mixer[i].parameters())
+                        self.target_mixer[i] = copy.deepcopy(self.mixer[i])
+                else:
+                    self.mixer = [QMixer(args)]
+                    self.params += list(self.mixer[0].parameters())
+                    self.target_mixer = [copy.deepcopy(self.mixer[0])]
             else:
                 raise ValueError("Mixer {} not recognised.".format(args.mixer))
-            self.params += list(self.mixer.parameters())
-            self.target_mixer = copy.deepcopy(self.mixer)
 
         self.optimiser = Adam(params=self.params, lr=args.lr)
 
@@ -112,8 +119,8 @@ class QLearner:
 
                 # Mix
                 if self.mixer is not None:
-                    chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
-                    target_max_qvals = self.target_mixer(target_max_qvals, batch["state"][:, 1:])
+                    chosen_action_qvals = self.mixer[i](chosen_action_qvals, batch["state"][:, :-1])
+                    target_max_qvals = self.target_mixer[i](target_max_qvals, batch["state"][:, 1:])
 
                 if self.args.standardise_returns:
                     target_max_qvals = target_max_qvals * th.sqrt(self.ret_ms.var) + self.ret_ms.mean
@@ -166,25 +173,31 @@ class QLearner:
     def _update_targets_hard(self):
         self.target_mac.load_state(self.mac)
         if self.mixer is not None:
-            self.target_mixer.load_state_dict(self.mixer.state_dict())
+            for i in range(len(self.mixer)):
+                self.target_mixer[i].load_state_dict(self.mixer[i].state_dict())
 
     def _update_targets_soft(self, tau):
         for target_param, param in zip(self.target_mac.parameters(), self.mac.parameters()):
             target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
         if self.mixer is not None:
-            for target_param, param in zip(self.target_mixer.parameters(), self.mixer.parameters()):
-                target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
+            for i in range(len(self.mixer)):
+                for target_param, param in zip(self.target_mixer[i].parameters(), self.mixer[i].parameters()):
+                    target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
 
     def cuda(self):
         self.mac.cuda()
         self.target_mac.cuda()
         if self.mixer is not None:
-            self.mixer.cuda()
-            self.target_mixer.cuda()
+            for i in range(len(self.mixer)):
+                self.mixer[i].cuda()
+                self.target_mixer[i].cuda()
+            # self.mixer.cuda()
+            # self.target_mixer.cuda()
 
     def save_models(self, path):
         self.mac.save_models(path)
         if self.mixer is not None:
+            # TODO: Will need to save these in list form
             th.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
         th.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
 
@@ -193,5 +206,6 @@ class QLearner:
         # Not quite right but I don't want to save target networks
         self.target_mac.load_models(path)
         if self.mixer is not None:
+            # TODO: Will need to load these in list form
             self.mixer.load_state_dict(th.load("{}/mixer.th".format(path), map_location=lambda storage, loc: storage))
         self.optimiser.load_state_dict(th.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage))

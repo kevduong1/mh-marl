@@ -25,7 +25,7 @@ standardise_returns: False
 standardise_rewards: True
 
 agent_output_type: "q"
-learner: "qmix_learner"
+learner: "q_learner"
 double_q: True
 mixer: "qmix"
 use_rnn: False

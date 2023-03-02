@@ -12,8 +12,7 @@ class BasicMAC:
         input_shape = self._get_input_shape(scheme)
 
         # Flag decides if we implement MH for actor network or critic network
-        self.use_mh_actor = args.use_mh and (args.learner == "q_learner") # TODO might have to change this if we decide to change QMIX implementation
-        print("use_mh_actor set to:" + str(self.use_mh_actor))
+        self.use_mh_actor = args.use_mh and (args.learner == "q_learner")
 
         self._build_agents(input_shape)
         self.agent_output_type = args.agent_output_type
@@ -44,6 +43,7 @@ class BasicMAC:
         avail_actions = ep_batch["avail_actions"][:, t]
         agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
 
+        # Specifically for IQL only
         if self.use_mh_actor:
             if learning_mode: # we keep list of separate gamma q vals for training during learning mode
                 return [agent_out.view(ep_batch.batch_size, self.n_agents, -1) for agent_out in agent_outs]

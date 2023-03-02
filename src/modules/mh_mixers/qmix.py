@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-
+# Single QMixer (no multi-horizon)
 class QMixer(nn.Module):
     def __init__(self, args):
         super(QMixer, self).__init__()
